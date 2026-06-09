@@ -233,19 +233,46 @@ app.post('/api/plants/:id/fertilize', (req, res) => {
   plants[index].lastFertilizing = now;
   plants[index].status = 'healthy';
   writeJSON('plants.json', plants);
-  
+
   const careRecords = readJSON('care-records.json');
-  careRecords.push({
+  const record = {
     id: generateId(),
     plantId: req.params.id,
     type: 'fertilizing',
     date: now,
     completed: true
-  });
+  };
+
+  let lowStockWarning = null;
+
+  if (req.body.fertilizerId) {
+    const fertilizers = readJSON('fertilizers.json');
+    const fIndex = fertilizers.findIndex(f => f.id === req.body.fertilizerId);
+    if (fIndex !== -1) {
+      const usage = Number(req.body.usage) || 0;
+      fertilizers[fIndex].quantity = Math.max(0, fertilizers[fIndex].quantity - usage);
+      fertilizers[fIndex].updatedAt = now;
+      writeJSON('fertilizers.json', fertilizers);
+      record.fertilizerId = req.body.fertilizerId;
+      record.fertilizerName = fertilizers[fIndex].name;
+      record.usage = usage;
+      if (fertilizers[fIndex].quantity <= (fertilizers[fIndex].lowStockThreshold || 5)) {
+        lowStockWarning = {
+          id: fertilizers[fIndex].id,
+          name: fertilizers[fIndex].name,
+          quantity: fertilizers[fIndex].quantity,
+          unit: fertilizers[fIndex].unit,
+          threshold: fertilizers[fIndex].lowStockThreshold || 5
+        };
+      }
+    }
+  }
+
+  careRecords.push(record);
   writeJSON('care-records.json', careRecords);
-  
+
   const nextCare = calculateNextCare(plants[index]);
-  res.json({ ...plants[index], ...nextCare });
+  res.json({ ...plants[index], ...nextCare, lowStockWarning });
 });
 
 app.get('/api/plants/:id/photos', (req, res) => {
@@ -559,6 +586,70 @@ app.get('/api/notifications', (req, res) => {
   
   notifications.sort((a, b) => new Date(a.date) - new Date(b.date));
   res.json(notifications);
+});
+
+app.get('/api/fertilizers', (req, res) => {
+  const fertilizers = readJSON('fertilizers.json');
+  const { lowStock } = req.query;
+  if (lowStock === 'true') {
+    return res.json(fertilizers.filter(f => f.quantity <= (f.lowStockThreshold || 5)));
+  }
+  res.json(fertilizers);
+});
+
+app.post('/api/fertilizers', (req, res) => {
+  const fertilizers = readJSON('fertilizers.json');
+  const now = new Date().toISOString();
+  const newFert = {
+    id: generateId(),
+    name: req.body.name || '',
+    specification: req.body.specification || '',
+    quantity: Number(req.body.quantity) || 0,
+    unit: req.body.unit || 'ml',
+    applicablePlants: req.body.applicablePlants || '',
+    batch: req.body.batch || '',
+    expiryDate: req.body.expiryDate || '',
+    lowStockThreshold: Number(req.body.lowStockThreshold) || 5,
+    createdAt: now,
+    updatedAt: now
+  };
+  fertilizers.push(newFert);
+  writeJSON('fertilizers.json', fertilizers);
+  res.json(newFert);
+});
+
+app.get('/api/fertilizers/low-stock', (req, res) => {
+  const fertilizers = readJSON('fertilizers.json');
+  const low = fertilizers.filter(f => f.quantity <= (f.lowStockThreshold || 5));
+  res.json(low);
+});
+
+app.put('/api/fertilizers/:id', (req, res) => {
+  const fertilizers = readJSON('fertilizers.json');
+  const index = fertilizers.findIndex(f => f.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: '肥料不存在' });
+  }
+  fertilizers[index] = {
+    ...fertilizers[index],
+    ...req.body,
+    id: fertilizers[index].id,
+    createdAt: fertilizers[index].createdAt,
+    updatedAt: new Date().toISOString()
+  };
+  writeJSON('fertilizers.json', fertilizers);
+  res.json(fertilizers[index]);
+});
+
+app.delete('/api/fertilizers/:id', (req, res) => {
+  let fertilizers = readJSON('fertilizers.json');
+  const fert = fertilizers.find(f => f.id === req.params.id);
+  if (!fert) {
+    return res.status(404).json({ error: '肥料不存在' });
+  }
+  fertilizers = fertilizers.filter(f => f.id !== req.params.id);
+  writeJSON('fertilizers.json', fertilizers);
+  res.json({ message: '删除成功' });
 });
 
 app.get('*', (req, res) => {

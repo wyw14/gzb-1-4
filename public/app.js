@@ -80,6 +80,48 @@ const api = {
   async getYearlyReportData(year) {
     const res = await fetch(`${API_BASE}/api/report/yearly?year=${year}`);
     return res.json();
+  },
+  async getFertilizers(lowStock) {
+    const url = lowStock ? `${API_BASE}/api/fertilizers?lowStock=true` : `${API_BASE}/api/fertilizers`;
+    const res = await fetch(url);
+    return res.json();
+  },
+  async createFertilizer(data) {
+    const res = await fetch(`${API_BASE}/api/fertilizers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return res.json();
+  },
+  async updateFertilizer(id, data) {
+    const res = await fetch(`${API_BASE}/api/fertilizers/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return res.json();
+  },
+  async deleteFertilizer(id) {
+    const res = await fetch(`${API_BASE}/api/fertilizers/${id}`, { method: 'DELETE' });
+    return res.json();
+  },
+  async getLowStockFertilizers() {
+    const res = await fetch(`${API_BASE}/api/fertilizers/low-stock`);
+    return res.json();
+  },
+  async fertilizePlant(id, fertilizerId, usage) {
+    const body = {};
+    if (fertilizerId) {
+      body.fertilizerId = fertilizerId;
+      body.usage = usage;
+    }
+    const res = await fetch(`${API_BASE}/api/plants/${id}/fertilize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return res.json();
   }
 };
 
@@ -256,6 +298,12 @@ const App = {
             </a>
           </li>
           <li>
+            <a @click="navigate('fertilizers')" :class="{ active: currentRoute === 'fertilizers' }">
+              <el-icon><FirstAidKit /></el-icon>
+              <span>营养品台账</span>
+            </a>
+          </li>
+          <li>
             <a @click="navigate('report')" :class="{ active: currentRoute === 'report' }">
               <el-icon><Document /></el-icon>
               <span>年度报告</span>
@@ -275,6 +323,7 @@ const App = {
         <notification-page v-else-if="currentRoute === 'notifications'" :notifications="notifications" @refresh="loadNotifications" />
         <photo-timeline v-else-if="currentRoute === 'photos'" />
         <pest-detection v-else-if="currentRoute === 'pests'" />
+        <fertilizer-ledger v-else-if="currentRoute === 'fertilizers'" />
         <yearly-report v-else-if="currentRoute === 'report'" />
       </main>
     </div>
@@ -530,6 +579,12 @@ const PlantManagement = {
     const uploadFile = ref(null);
     const photoNote = ref('');
     const photoLoading = ref(false);
+    const fertilizeDialogVisible = ref(false);
+    const fertilizePlant_ref = ref(null);
+    const fertilizerList = ref([]);
+    const selectedFertilizerId = ref('');
+    const fertilizeUsage = ref(10);
+    const fertilizeLoading = ref(false);
 
     const formData = reactive({
       name: '',
@@ -680,12 +735,41 @@ const PlantManagement = {
     };
 
     const handleFertilize = async (plant) => {
+      fertilizePlant_ref.value = plant;
+      selectedFertilizerId.value = '';
+      fertilizeUsage.value = 10;
       try {
-        await api.fertilizePlant(plant.id);
-        ElMessage.success(`已记录 ${plant.name} 的施肥`);
+        fertilizerList.value = await api.getFertilizers();
+      } catch (e) {
+        fertilizerList.value = [];
+      }
+      fertilizeDialogVisible.value = true;
+    };
+
+    const confirmFertilize = async () => {
+      if (!fertilizePlant_ref.value) return;
+      try {
+        fertilizeLoading.value = true;
+        const result = await api.fertilizePlant(
+          fertilizePlant_ref.value.id,
+          selectedFertilizerId.value || null,
+          selectedFertilizerId.value ? fertilizeUsage.value : 0
+        );
+        ElMessage.success(`已记录 ${fertilizePlant_ref.value.name} 的施肥`);
+        if (result.lowStockWarning) {
+          const w = result.lowStockWarning;
+          ElMessageBox.alert(
+            `${w.name} 余量仅剩 ${w.quantity} ${w.unit}，低于安全线 ${w.threshold} ${w.unit}，请及时补货！`,
+            '⚠️ 低库存预警',
+            { confirmButtonText: '知道了', type: 'warning' }
+          );
+        }
+        fertilizeDialogVisible.value = false;
         loadPlants();
       } catch (e) {
         ElMessage.error('操作失败');
+      } finally {
+        fertilizeLoading.value = false;
       }
     };
 
@@ -806,7 +890,14 @@ const PlantManagement = {
       openPhotoDialog,
       handlePhotoUpload,
       handlePhotoDelete,
-      handleFileChange
+      handleFileChange,
+      fertilizeDialogVisible,
+      fertilizePlant_ref,
+      fertilizerList,
+      selectedFertilizerId,
+      fertilizeUsage,
+      fertilizeLoading,
+      confirmFertilize
     };
   },
   template: `
@@ -1027,6 +1118,27 @@ const PlantManagement = {
             </div>
           </div>
         </div>
+      </el-dialog>
+
+      <el-dialog v-model="fertilizeDialogVisible" title="施肥 - 选择肥料" width="500px">
+        <div v-if="fertilizePlant_ref" style="margin-bottom: 16px;">
+          <span style="font-weight: bold; font-size: 16px;">🌱 {{ fertilizePlant_ref.name }}</span>
+        </div>
+        <el-form label-width="100px">
+          <el-form-item label="选择肥料">
+            <el-select v-model="selectedFertilizerId" placeholder="不选择肥料（仅记录）" clearable style="width: 100%;">
+              <el-option v-for="f in fertilizerList" :key="f.id" :label="f.name + ' (' + f.specification + ') - 余量 ' + f.quantity + f.unit" :value="f.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="selectedFertilizerId" label="用量">
+            <el-input-number v-model="fertilizeUsage" :min="1" :max="9999" />
+            <span style="margin-left: 8px; color: #666;">{{ fertilizerList.find(f => f.id === selectedFertilizerId)?.unit || '' }}</span>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="fertilizeDialogVisible = false">取消</el-button>
+          <el-button type="warning" @click="confirmFertilize" :loading="fertilizeLoading">确认施肥</el-button>
+        </template>
       </el-dialog>
     </div>
   `
@@ -1447,6 +1559,359 @@ const PestDetection = {
   `
 };
 
+const FertilizerLedger = {
+  setup() {
+    const fertilizers = ref([]);
+    const loading = ref(false);
+    const dialogVisible = ref(false);
+    const isEdit = ref(false);
+    const currentFert = ref(null);
+    const searchKeyword = ref('');
+    const lowStockOnly = ref(false);
+
+    const formData = reactive({
+      name: '',
+      specification: '',
+      quantity: 0,
+      unit: 'ml',
+      applicablePlants: '',
+      batch: '',
+      expiryDate: '',
+      lowStockThreshold: 5
+    });
+
+    const rules = {
+      name: [{ required: true, message: '请输入肥料名称', trigger: 'blur' }],
+      quantity: [{ required: true, message: '请输入余量', trigger: 'blur' }]
+    };
+
+    const filteredFertilizers = computed(() => {
+      let result = fertilizers.value;
+      if (lowStockOnly.value) {
+        result = result.filter(f => f.quantity <= (f.lowStockThreshold || 5));
+      }
+      if (searchKeyword.value) {
+        const kw = searchKeyword.value.toLowerCase();
+        result = result.filter(f =>
+          f.name.toLowerCase().includes(kw) ||
+          (f.specification && f.specification.toLowerCase().includes(kw)) ||
+          (f.applicablePlants && f.applicablePlants.toLowerCase().includes(kw)) ||
+          (f.batch && f.batch.toLowerCase().includes(kw))
+        );
+      }
+      return result;
+    });
+
+    const lowStockCount = computed(() => {
+      return fertilizers.value.filter(f => f.quantity <= (f.lowStockThreshold || 5)).length;
+    });
+
+    const nearExpiryCount = computed(() => {
+      const now = new Date();
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      return fertilizers.value.filter(f => {
+        if (!f.expiryDate) return false;
+        const diff = new Date(f.expiryDate) - now;
+        return diff <= thirtyDays && diff > 0;
+      }).length;
+    });
+
+    const expiredCount = computed(() => {
+      const now = new Date();
+      return fertilizers.value.filter(f => f.expiryDate && new Date(f.expiryDate) < now).length;
+    });
+
+    const loadFertilizers = async () => {
+      try {
+        loading.value = true;
+        fertilizers.value = await api.getFertilizers();
+      } catch (e) {
+        ElMessage.error('加载肥料台账失败');
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    const openAddDialog = () => {
+      isEdit.value = false;
+      currentFert.value = null;
+      Object.assign(formData, {
+        name: '',
+        specification: '',
+        quantity: 0,
+        unit: 'ml',
+        applicablePlants: '',
+        batch: '',
+        expiryDate: '',
+        lowStockThreshold: 5
+      });
+      dialogVisible.value = true;
+    };
+
+    const openEditDialog = (fert) => {
+      isEdit.value = true;
+      currentFert.value = fert;
+      Object.assign(formData, {
+        name: fert.name,
+        specification: fert.specification || '',
+        quantity: fert.quantity,
+        unit: fert.unit || 'ml',
+        applicablePlants: fert.applicablePlants || '',
+        batch: fert.batch || '',
+        expiryDate: fert.expiryDate ? fert.expiryDate.split('T')[0] : '',
+        lowStockThreshold: fert.lowStockThreshold || 5
+      });
+      dialogVisible.value = true;
+    };
+
+    const handleSubmit = async (formRef) => {
+      if (!formRef) return;
+      await formRef.validate(async (valid) => {
+        if (valid) {
+          try {
+            const submitData = { ...formData };
+            if (submitData.expiryDate) {
+              submitData.expiryDate = new Date(submitData.expiryDate).toISOString();
+            }
+            if (isEdit.value) {
+              await api.updateFertilizer(currentFert.value.id, submitData);
+              ElMessage.success('肥料信息更新成功');
+            } else {
+              await api.createFertilizer(submitData);
+              ElMessage.success('肥料添加成功');
+            }
+            dialogVisible.value = false;
+            loadFertilizers();
+          } catch (e) {
+            ElMessage.error('保存失败');
+          }
+        }
+      });
+    };
+
+    const handleDelete = async (fert) => {
+      try {
+        await ElMessageBox.confirm(`确定要删除 "${fert.name}" 吗？`, '确认删除', { type: 'warning' });
+        await api.deleteFertilizer(fert.id);
+        ElMessage.success('删除成功');
+        loadFertilizers();
+      } catch (e) {
+        if (e !== 'cancel') ElMessage.error('删除失败');
+      }
+    };
+
+    const isLowStock = (fert) => fert.quantity <= (fert.lowStockThreshold || 5);
+
+    const isExpired = (fert) => fert.expiryDate && new Date(fert.expiryDate) < new Date();
+
+    const isNearExpiry = (fert) => {
+      if (!fert.expiryDate) return false;
+      const diff = new Date(fert.expiryDate) - new Date();
+      return diff > 0 && diff <= 30 * 24 * 60 * 60 * 1000;
+    };
+
+    const getExpiryTag = (fert) => {
+      if (isExpired(fert)) return { type: 'danger', text: '已过期' };
+      if (isNearExpiry(fert)) return { type: 'warning', text: '即将到期' };
+      return { type: 'success', text: '正常' };
+    };
+
+    onMounted(() => {
+      loadFertilizers();
+    });
+
+    return {
+      fertilizers,
+      loading,
+      dialogVisible,
+      isEdit,
+      currentFert,
+      formData,
+      rules,
+      searchKeyword,
+      lowStockOnly,
+      filteredFertilizers,
+      lowStockCount,
+      nearExpiryCount,
+      expiredCount,
+      openAddDialog,
+      openEditDialog,
+      handleSubmit,
+      handleDelete,
+      isLowStock,
+      isExpired,
+      isNearExpiry,
+      getExpiryTag,
+      formatDate
+    };
+  },
+  template: `
+    <div>
+      <div class="page-header">
+        <h1 class="page-title">🧪 营养品台账</h1>
+        <div class="page-header-actions">
+          <el-button type="primary" @click="openAddDialog">
+            <el-icon><Plus /></el-icon> 添加肥料
+          </el-button>
+        </div>
+      </div>
+
+      <el-row :gutter="20" style="margin-bottom: 24px;">
+        <el-col :xs="12" :sm="6">
+          <div class="stat-card">
+            <div class="stat-card-icon green">🧪</div>
+            <div class="stat-card-value">{{ fertilizers.length }}</div>
+            <div class="stat-card-label">肥料总数</div>
+          </div>
+        </el-col>
+        <el-col :xs="12" :sm="6">
+          <div class="stat-card">
+            <div class="stat-card-icon orange">📦</div>
+            <div class="stat-card-value">{{ lowStockCount }}</div>
+            <div class="stat-card-label">低库存</div>
+          </div>
+        </el-col>
+        <el-col :xs="12" :sm="6">
+          <div class="stat-card">
+            <div class="stat-card-icon red">⏰</div>
+            <div class="stat-card-value">{{ expiredCount }}</div>
+            <div class="stat-card-label">已过期</div>
+          </div>
+        </el-col>
+        <el-col :xs="12" :sm="6">
+          <div class="stat-card">
+            <div class="stat-card-icon purple">🔔</div>
+            <div class="stat-card-value">{{ nearExpiryCount }}</div>
+            <div class="stat-card-label">即将到期</div>
+          </div>
+        </el-col>
+      </el-row>
+
+      <div class="filter-bar">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索名称、规格、适用植物、批次"
+          clearable
+          style="width: 280px;"
+        />
+        <el-checkbox v-model="lowStockOnly" label="仅看低库存" />
+        <span style="color: #666; margin-left: auto;">共 {{ filteredFertilizers.length }} 种肥料</span>
+      </div>
+
+      <div v-loading="loading">
+        <div v-if="filteredFertilizers.length === 0" class="empty-state">
+          <div class="empty-state-icon">🧪</div>
+          <div class="empty-state-text">暂无肥料记录，点击上方按钮添加</div>
+        </div>
+        <el-table v-else :data="filteredFertilizers" style="width: 100%" border stripe>
+          <el-table-column prop="name" label="名称" width="140">
+            <template #default="{ row }">
+              <span style="font-weight: bold;">{{ row.name }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="specification" label="规格" width="140" />
+          <el-table-column label="余量" width="120" align="center">
+            <template #default="{ row }">
+              <span :style="{ color: isLowStock(row) ? '#f44336' : '#333', fontWeight: isLowStock(row) ? 'bold' : 'normal' }">
+                {{ row.quantity }} {{ row.unit }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="applicablePlants" label="适用植物" width="160" />
+          <el-table-column prop="batch" label="批次" width="140" />
+          <el-table-column label="到期日" width="140" align="center">
+            <template #default="{ row }">
+              <span v-if="!row.expiryDate">-</span>
+              <el-tag v-else :type="getExpiryTag(row).type" size="small">
+                {{ formatDate(row.expiryDate) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="低库存线" width="100" align="center">
+            <template #default="{ row }">
+              {{ row.lowStockThreshold || 5 }} {{ row.unit }}
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="isExpired(row)" type="danger">已过期</el-tag>
+              <el-tag v-else-if="isLowStock(row)" type="warning">低库存</el-tag>
+              <el-tag v-else-if="isNearExpiry(row)" type="warning">临期</el-tag>
+              <el-tag v-else type="success">正常</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="150" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" @click="openEditDialog(row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑肥料' : '添加肥料'" width="600px">
+        <el-form ref="fertFormRef" :model="formData" :rules="rules" label-width="110px">
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="肥料名称" prop="name">
+                <el-input v-model="formData.name" placeholder="如：花多多1号" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="规格">
+                <el-input v-model="formData.specification" placeholder="如：500g/瓶" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="20">
+            <el-col :span="8">
+              <el-form-item label="余量" prop="quantity">
+                <el-input-number v-model="formData.quantity" :min="0" style="width: 100%;" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="单位">
+                <el-select v-model="formData.unit" style="width: 100%;">
+                  <el-option label="ml" value="ml" />
+                  <el-option label="g" value="g" />
+                  <el-option label="kg" value="kg" />
+                  <el-option label="L" value="L" />
+                  <el-option label="粒" value="粒" />
+                  <el-option label="包" value="包" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="低库存线">
+                <el-input-number v-model="formData.lowStockThreshold" :min="0" style="width: 100%;" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="适用植物">
+            <el-input v-model="formData.applicablePlants" placeholder="如：绿萝、吊兰、龟背竹" />
+          </el-form-item>
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="批次号">
+                <el-input v-model="formData.batch" placeholder="如：20250601" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="到期日">
+                <el-date-picker v-model="formData.expiryDate" type="date" style="width: 100%;" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </el-form>
+        <template #footer>
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleSubmit($refs.fertFormRef)">保存</el-button>
+        </template>
+      </el-dialog>
+    </div>
+  `
+};
+
 const YearlyReport = {
   setup() {
     const selectedYear = ref(new Date().getFullYear());
@@ -1721,6 +2186,7 @@ app.component('plant-management', PlantManagement);
 app.component('notification-page', NotificationPage);
 app.component('photo-timeline', PhotoTimeline);
 app.component('pest-detection', PestDetection);
+app.component('fertilizer-ledger', FertilizerLedger);
 app.component('yearly-report', YearlyReport);
 
 app.mount('#app');
