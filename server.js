@@ -250,7 +250,13 @@ app.post('/api/plants/:id/fertilize', (req, res) => {
     const fIndex = fertilizers.findIndex(f => f.id === req.body.fertilizerId);
     if (fIndex !== -1) {
       const usage = Number(req.body.usage) || 0;
-      fertilizers[fIndex].quantity = Math.max(0, fertilizers[fIndex].quantity - usage);
+      if (usage > fertilizers[fIndex].quantity) {
+        return res.status(400).json({
+          error: '库存不足',
+          detail: `${fertilizers[fIndex].name} 当前余量 ${fertilizers[fIndex].quantity} ${fertilizers[fIndex].unit}，无法扣减 ${usage} ${fertilizers[fIndex].unit}`
+        });
+      }
+      fertilizers[fIndex].quantity = fertilizers[fIndex].quantity - usage;
       fertilizers[fIndex].updatedAt = now;
       writeJSON('fertilizers.json', fertilizers);
       record.fertilizerId = req.body.fertilizerId;

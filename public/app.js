@@ -121,6 +121,10 @@ const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
+    if (!res.ok) {
+      const err = await res.json();
+      throw err;
+    }
     return res.json();
   }
 };
@@ -748,6 +752,13 @@ const PlantManagement = {
 
     const confirmFertilize = async () => {
       if (!fertilizePlant_ref.value) return;
+      if (selectedFertilizerId.value) {
+        const fert = fertilizerList.value.find(f => f.id === selectedFertilizerId.value);
+        if (fert && fertilizeUsage.value > fert.quantity) {
+          ElMessage.warning(`${fert.name} 库存不足，当前余量 ${fert.quantity} ${fert.unit}，无法使用 ${fertilizeUsage.value} ${fert.unit}`);
+          return;
+        }
+      }
       try {
         fertilizeLoading.value = true;
         const result = await api.fertilizePlant(
@@ -766,8 +777,18 @@ const PlantManagement = {
         }
         fertilizeDialogVisible.value = false;
         loadPlants();
+        fertilizerList.value = await api.getFertilizers();
       } catch (e) {
-        ElMessage.error('操作失败');
+        if (e && e.detail) {
+          ElMessage.error(e.detail);
+        } else {
+          try {
+            const errData = typeof e === 'object' ? e : JSON.parse(e.message || '{}');
+            ElMessage.error(errData.detail || '操作失败');
+          } catch {
+            ElMessage.error('操作失败');
+          }
+        }
       } finally {
         fertilizeLoading.value = false;
       }
@@ -1131,8 +1152,8 @@ const PlantManagement = {
             </el-select>
           </el-form-item>
           <el-form-item v-if="selectedFertilizerId" label="用量">
-            <el-input-number v-model="fertilizeUsage" :min="1" :max="9999" />
-            <span style="margin-left: 8px; color: #666;">{{ fertilizerList.find(f => f.id === selectedFertilizerId)?.unit || '' }}</span>
+            <el-input-number v-model="fertilizeUsage" :min="1" :max="fertilizerList.find(f => f.id === selectedFertilizerId)?.quantity || 9999" />
+            <span style="margin-left: 8px; color: #666;">{{ fertilizerList.find(f => f.id === selectedFertilizerId)?.unit || '' }}（库存 {{ fertilizerList.find(f => f.id === selectedFertilizerId)?.quantity ?? '-' }}）</span>
           </el-form-item>
         </el-form>
         <template #footer>
